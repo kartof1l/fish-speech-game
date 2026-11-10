@@ -4,3 +4,4 @@ __pycache__/
 assets/tts_cache/
 *.zip
 custom_words.json
+*.zip

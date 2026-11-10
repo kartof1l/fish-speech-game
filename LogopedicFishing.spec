@@ -1,12 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
+
+datas = [('models', 'models'), ('assets', 'assets')]
+binaries = [('venv/Lib/site-packages/vosk/libvosk.dll', 'vosk')]
+hiddenimports = ['pygame', 'vosk', 'edge_tts', 'pyttsx3', 'asyncio']
+tmp_ret = collect_all('sounddevice')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['game_pygame.py'],
     pathex=[],
-    binaries=[],
-    datas=[('models', 'models'), ('assets', 'assets')],
-    hiddenimports=['pygame', 'vosk', 'sounddevice', 'edge_tts', 'pyttsx3', 'asyncio'],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -19,20 +26,26 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='LogopedicFishing',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='LogopedicFishing',
 )

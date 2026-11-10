@@ -12,9 +12,18 @@ from vosk import Model, KaldiRecognizer
 import traceback
 import time
 
-MODEL_PATH = "models/vosk-model-small-ru-0.22"
-CACHE_DIR = "assets/tts_cache"
-CUSTOM_WORDS_FILE = "custom_words.json"
+import sys
+import os
+
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+MODEL_PATH = os.path.join(BASE_DIR, "models", "vosk-model-small-ru-0.22")
+CACHE_DIR = os.path.join(BASE_DIR, "assets", "tts_cache")
+CUSTOM_WORDS_FILE = os.path.join(BASE_DIR, "custom_words.json")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 DEFAULT_WORDS = {
@@ -97,14 +106,14 @@ sound_catch = None
 sound_splash = None
 sound_cat_eat = None 
 
-if os.path.exists("assets/sounds/catch.wav"):
-    sound_catch = pygame.mixer.Sound("assets/sounds/catch.wav")
-if os.path.exists("assets/sounds/splash.wav"):
-    sound_splash = pygame.mixer.Sound("assets/sounds/splash.wav")
-if os.path.exists("assets/sounds/cat_eat.wav"):
-    sound_cat_eat = pygame.mixer.Sound("assets/sounds/cat_eat.wav")
-if os.path.exists("assets/sounds/music.mp3"):
-    pygame.mixer.music.load("assets/sounds/music.mp3")
+if os.path.exists(os.path.join(BASE_DIR, "assets", "sounds", "catch.wav")):
+    sound_catch = pygame.mixer.Sound(os.path.join(BASE_DIR, "assets", "sounds", "catch.wav"))
+if os.path.exists(os.path.join(BASE_DIR, "assets", "sounds", "splash.wav")):
+    sound_splash = pygame.mixer.Sound(os.path.join(BASE_DIR, "assets", "sounds", "splash.wav"))
+if os.path.exists(os.path.join(BASE_DIR, "assets", "sounds", "cat_eat.wav")):
+    sound_cat_eat = pygame.mixer.Sound(os.path.join(BASE_DIR, "assets", "sounds", "cat_eat.wav"))
+if os.path.exists(os.path.join(BASE_DIR, "assets", "sounds", "music.mp3")):
+    pygame.mixer.music.load(os.path.join(BASE_DIR, "assets", "sounds", "music.mp3"))
     pygame.mixer.music.play(-1)
 
 def update_volumes():

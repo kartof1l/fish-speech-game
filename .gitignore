@@ -1,0 +1,6 @@
+﻿venv/
+__pycache__/
+*.pyc
+assets/tts_cache/
+*.zip
+custom_words.json

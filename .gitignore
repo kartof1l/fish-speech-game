@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 assets/tts_cache/
 custom_words.json
+
+dist/
+build/
+installer/
+.unifypy/

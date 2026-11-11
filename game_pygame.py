@@ -11,9 +11,7 @@ import sounddevice as sd
 from vosk import Model, KaldiRecognizer
 import traceback
 import time
-
 import sys
-import os
 
 if getattr(sys, 'frozen', False):
     BASE_DIR = sys._MEIPASS
@@ -74,9 +72,11 @@ pygame.mixer.init()
 pygame.mixer.set_num_channels(8)
 
 WIDTH, HEIGHT = 800, 600
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
+screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
 pygame.display.set_caption("Логопедическая рыбалка")
 clock = pygame.time.Clock()
+
+is_fullscreen = False
 
 font_big = pygame.font.SysFont("Arial", 50, bold=True)
 font_med = pygame.font.SysFont("Arial", 28, bold=True)
@@ -106,6 +106,7 @@ vol_fx = 0.8
 sound_catch = None
 sound_splash = None
 sound_cat_eat = None 
+sound_scare = None
 
 if os.path.exists(os.path.join(BASE_DIR, "assets", "sounds", "catch.wav")):
     sound_catch = pygame.mixer.Sound(os.path.join(BASE_DIR, "assets", "sounds", "catch.wav"))
@@ -113,6 +114,8 @@ if os.path.exists(os.path.join(BASE_DIR, "assets", "sounds", "splash.wav")):
     sound_splash = pygame.mixer.Sound(os.path.join(BASE_DIR, "assets", "sounds", "splash.wav"))
 if os.path.exists(os.path.join(BASE_DIR, "assets", "sounds", "cat_eat.wav")):
     sound_cat_eat = pygame.mixer.Sound(os.path.join(BASE_DIR, "assets", "sounds", "cat_eat.wav"))
+if os.path.exists(os.path.join(BASE_DIR, "assets", "sounds", "scare.wav")):
+    sound_scare = pygame.mixer.Sound(os.path.join(BASE_DIR, "assets", "sounds", "scare.wav"))
 if os.path.exists(os.path.join(BASE_DIR, "assets", "sounds", "music.mp3")):
     pygame.mixer.music.load(os.path.join(BASE_DIR, "assets", "sounds", "music.mp3"))
     pygame.mixer.music.play(-1)
@@ -122,6 +125,7 @@ def update_volumes():
     if sound_catch: sound_catch.set_volume(vol_fx * MAX_FX_VOL)
     if sound_splash: sound_splash.set_volume(vol_fx * MAX_FX_VOL)
     if sound_cat_eat: sound_cat_eat.set_volume(vol_fx * MAX_FX_VOL)
+    if sound_scare: sound_scare.set_volume(vol_fx * MAX_FX_VOL)
 
 update_volumes()
 
@@ -145,7 +149,6 @@ def generate_tts_async(text):
             pass
     threading.Thread(target=run, daemon=True).start()
 
-# Измененная функция: сначала ждем звук поедания, потом говорим
 def speak_commentary_after_eat(text, eat_duration):
     global is_speaking
     filepath = get_audio_filename(text)
@@ -161,8 +164,7 @@ def speak_commentary_after_eat(text, eat_duration):
     def run_sequence():
         global is_speaking
         try:
-            time.sleep(eat_duration) # Ждем, пока кот жует
-            
+            time.sleep(eat_duration)
             sound = pygame.mixer.Sound(filepath)
             sound.set_volume(vol_fx * MAX_FX_VOL)
             sound.play()
@@ -175,7 +177,6 @@ def speak_commentary_after_eat(text, eat_duration):
 
     threading.Thread(target=run_sequence, daemon=True).start()
 
-# Обычное произнесение (для клика по рыбке)
 def speak_text(text):
     speak_commentary_after_eat(text, 0)
 
@@ -185,27 +186,29 @@ class Slider:
         self.value = value
         self.dragging = False
 
-    def draw(self, surface):
-        pygame.draw.rect(surface, (80, 80, 80), self.rect, border_radius=5)
-        fill_width = int(self.rect.width * self.value)
-        fill_rect = pygame.Rect(self.rect.x, self.rect.y, fill_width, self.rect.height)
+    def draw(self, surface, offset_x, offset_y):
+        r = self.rect.move(offset_x, offset_y)
+        pygame.draw.rect(surface, (80, 80, 80), r, border_radius=5)
+        fill_width = int(r.width * self.value)
+        fill_rect = pygame.Rect(r.x, r.y, fill_width, r.height)
         pygame.draw.rect(surface, (0, 200, 255), fill_rect, border_radius=5)
-        knob_x = self.rect.x + fill_width
-        pygame.draw.circle(surface, (255, 255, 255), (knob_x, self.rect.centery), self.rect.height // 2 + 2)
-        pygame.draw.circle(surface, (0,0,0), (knob_x, self.rect.centery), self.rect.height // 2 + 2, 1)
+        knob_x = r.x + fill_width
+        pygame.draw.circle(surface, (255, 255, 255), (knob_x, r.centery), r.height // 2 + 2)
+        pygame.draw.circle(surface, (0,0,0), (knob_x, r.centery), r.height // 2 + 2, 1)
 
-    def handle_event(self, event):
+    def handle_event(self, event, offset_x, offset_y):
+        r = self.rect.move(offset_x, offset_y)
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if self.rect.inflate(0, 15).collidepoint(event.pos):
+            if r.inflate(0, 15).collidepoint(event.pos):
                 self.dragging = True
-                self.update_value(event.pos[0])
+                self.update_value(event.pos[0], offset_x)
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             self.dragging = False
         elif event.type == pygame.MOUSEMOTION and self.dragging:
-            self.update_value(event.pos[0])
+            self.update_value(event.pos[0], offset_x)
 
-    def update_value(self, mouse_x):
-        rel_x = max(0, min(mouse_x - self.rect.x, self.rect.width))
+    def update_value(self, mouse_x, offset_x):
+        rel_x = max(0, min(mouse_x - offset_x - self.rect.x, self.rect.width))
         self.value = rel_x / self.rect.width
 
 slider_music = Slider(160, 18, 80, 8, vol_music)
@@ -262,73 +265,87 @@ class Fish:
         if not self.word: return ""
         return f"Молодец! Ты поймал {SIZES_RU[self.size_desc]} {COLORS_RU[self.color_desc]} рыбку!"
 
-    def draw(self, surface, x, y, state, time_val):
+    def draw(self, surface, x, y, state, time_val, offset_x, offset_y):
         if not self.word: return pygame.Rect(0,0,0,0)
         
+        if state == "waiting" or state == "listening" or state == "confused":
+            shake = math.sin(time_val * 15) * 2 if state in ("listening", "confused") else 0
+            
+            cx = x + offset_x + shake
+            cy = y - 20 + offset_y
+            
+            pygame.draw.ellipse(surface, (210, 230, 250), (cx - 70, cy - 40, 140, 80))
+            pygame.draw.ellipse(surface, (255, 255, 255), (cx - 60, cy - 30, 120, 60))
+            pygame.draw.ellipse(surface, (255, 255, 255), (cx - 40, cy - 50, 80, 50))
+            
+            pygame.draw.ellipse(surface, (20, 50, 100), (cx - 50, cy + 20, 100, 20))
+            
+            draw_text_outlined(surface, "?", font_big, cx, cy - 5, (50, 100, 200), (255, 255, 255), 3, center=True)
+            
+            text_rect = font_big.render(self.word.upper(), True, (0,0,0)).get_rect(center=(x + offset_x, y - self.body_h//2 - 80 + offset_y))
+            bubble_rect = text_rect.inflate(40, 20)
+            pygame.draw.rect(surface, (255, 255, 255), bubble_rect, border_radius=20)
+            pygame.draw.rect(surface, (100, 200, 255), bubble_rect, width=4, border_radius=20)
+            bubble_tail = [(x-10 + offset_x, bubble_rect.bottom-5), (x+10 + offset_x, bubble_rect.bottom-5), (x + offset_x, bubble_rect.bottom+15)]
+            pygame.draw.polygon(surface, (255, 255, 255), bubble_tail)
+            pygame.draw.polygon(surface, (100, 200, 255), bubble_tail, 4)
+            
+            draw_text_outlined(surface, self.word.upper(), font_big, x + offset_x, y - self.body_h//2 - 80 + offset_y, (50, 50, 150), (0,0,0), 2, center=True)
+            
+            hitbox = pygame.Rect(cx - 70, cy - 60, 140, 120)
+            return hitbox
+
         bob = math.sin(time_val * 3) * 5 if state != "flying" else 0
+        if state == "scared":
+            bob += math.sin(time_val * 50) * 4 
+            
         y += bob
+        
         outline_color = (0, 0, 0)
         ow = max(2, int(3 * self.size))
         hitbox = pygame.Rect(x - self.body_w//2 - self.tail_size, y - self.body_h//2, self.body_w + self.tail_size, self.body_h)
         
         if self.tail_type == 0:
-            pts = [(x-self.body_w//2, y), (x-self.body_w//2 - self.tail_size, y-self.tail_size), (x-self.body_w//2 - self.tail_size, y+self.tail_size)]
+            pts = [(x-self.body_w//2 + offset_x, y + offset_y), (x-self.body_w//2 - self.tail_size + offset_x, y-self.tail_size + offset_y), (x-self.body_w//2 - self.tail_size + offset_x, y+self.tail_size + offset_y)]
             pygame.draw.polygon(surface, self.color, pts)
             pygame.draw.polygon(surface, outline_color, pts, ow)
-            pygame.draw.line(surface, outline_color, (x-self.body_w//2, y), (x-self.body_w//2 - self.tail_size, y-self.tail_size//2), max(1, ow//2))
-            pygame.draw.line(surface, outline_color, (x-self.body_w//2, y), (x-self.body_w//2 - self.tail_size, y+self.tail_size//2), max(1, ow//2))
+            pygame.draw.line(surface, outline_color, (x-self.body_w//2 + offset_x, y + offset_y), (x-self.body_w//2 - self.tail_size + offset_x, y-self.tail_size//2 + offset_y), max(1, ow//2))
+            pygame.draw.line(surface, outline_color, (x-self.body_w//2 + offset_x, y + offset_y), (x-self.body_w//2 - self.tail_size + offset_x, y+self.tail_size//2 + offset_y), max(1, ow//2))
         elif self.tail_type == 1:
-            pts1 = [(x-self.body_w//2, y), (x-self.body_w//2 - self.tail_size, y-self.tail_size), (x-self.body_w//2 - self.tail_size//2, y)]
-            pts2 = [(x-self.body_w//2, y), (x-self.body_w//2 - self.tail_size, y+self.tail_size), (x-self.body_w//2 - self.tail_size//2, y)]
+            pts1 = [(x-self.body_w//2 + offset_x, y + offset_y), (x-self.body_w//2 - self.tail_size + offset_x, y-self.tail_size + offset_y), (x-self.body_w//2 - self.tail_size//2 + offset_x, y + offset_y)]
+            pts2 = [(x-self.body_w//2 + offset_x, y + offset_y), (x-self.body_w//2 - self.tail_size + offset_x, y+self.tail_size + offset_y), (x-self.body_w//2 - self.tail_size//2 + offset_x, y + offset_y)]
             pygame.draw.polygon(surface, self.color, pts1)
             pygame.draw.polygon(surface, outline_color, pts1, ow)
             pygame.draw.polygon(surface, self.color, pts2)
             pygame.draw.polygon(surface, outline_color, pts2, ow)
         else:
-            pts = [(x-self.body_w//2, y), (x-self.body_w//2 - self.tail_size*1.5, y-self.tail_size*1.5), (x-self.body_w//2 - self.tail_size, y)]
+            pts = [(x-self.body_w//2 + offset_x, y + offset_y), (x-self.body_w//2 - self.tail_size*1.5 + offset_x, y-self.tail_size*1.5 + offset_y), (x-self.body_w//2 - self.tail_size + offset_x, y + offset_y)]
             pygame.draw.polygon(surface, self.color, pts)
             pygame.draw.polygon(surface, outline_color, pts, ow)
 
-        fin_pts = [(x-self.body_w//4, y-self.body_h//2), (x, y-self.body_h//2 - self.fin_size), (x+self.body_w//4, y-self.body_h//2)]
+        fin_pts = [(x-self.body_w//4 + offset_x, y-self.body_h//2 + offset_y), (x + offset_x, y-self.body_h//2 - self.fin_size + offset_y), (x+self.body_w//4 + offset_x, y-self.body_h//2 + offset_y)]
         pygame.draw.polygon(surface, self.color, fin_pts)
         pygame.draw.polygon(surface, outline_color, fin_pts, ow)
-        pygame.draw.line(surface, outline_color, (x-self.body_w//4, y-self.body_h//2), (x, y-self.body_h//2 - self.fin_size//2), max(1, ow//2))
-        pygame.draw.line(surface, outline_color, (x+self.body_w//4, y-self.body_h//2), (x, y-self.body_h//2 - self.fin_size//2), max(1, ow//2))
         
-        body_rect = (x-self.body_w//2, y-self.body_h//2, self.body_w, self.body_h)
+        body_rect = (x-self.body_w//2 + offset_x, y-self.body_h//2 + offset_y, self.body_w, self.body_h)
         pygame.draw.ellipse(surface, self.color, body_rect)
         pygame.draw.ellipse(surface, outline_color, body_rect, ow)
         
-        side_fin_pts = [(x-self.body_w//4, y+self.body_h//4), (x-self.body_w//6, y+self.body_h//2), (x, y+self.body_h//4)]
-        pygame.draw.polygon(surface, self.color, side_fin_pts)
-        pygame.draw.polygon(surface, outline_color, side_fin_pts, max(1, ow-1))
-
-        eye_x = x + self.body_w//4
-        eye_y = y - self.body_h//6
+        eye_x = x + self.body_w//4 + offset_x
+        eye_y = y - self.body_h//6 + offset_y
         eye_r = int(10 * self.size)
         pygame.draw.circle(surface, (255, 255, 255), (int(eye_x), int(eye_y)), eye_r)
         pygame.draw.circle(surface, outline_color, (int(eye_x), int(eye_y)), eye_r, 2)
-        pygame.draw.circle(surface, (0, 0, 0), (int(eye_x + 3), int(eye_y)), int(5 * self.size))
-        pygame.draw.circle(surface, (255, 255, 255), (int(eye_x + 5), int(eye_y - 2)), int(2 * self.size))
         
-        mouth_rect = (x+self.body_w//3, y+self.body_h//6 if state == "confused" else y, int(15*self.size), int(15*self.size))
-        pygame.draw.arc(surface, outline_color, mouth_rect, 0 if state == "confused" else math.pi, math.pi if state == "confused" else 2*math.pi, 2)
-
-        text_rect = font_big.render(self.word.upper(), True, (0,0,0)).get_rect(center=(x, y - self.body_h//2 - 60))
-        bubble_rect = text_rect.inflate(40, 20)
-        pygame.draw.rect(surface, (255, 255, 255), bubble_rect, border_radius=20)
-        pygame.draw.rect(surface, (100, 200, 255), bubble_rect, width=4, border_radius=20)
-        bubble_tail = [(x-10, bubble_rect.bottom-5), (x+10, bubble_rect.bottom-5), (x, bubble_rect.bottom+15)]
-        pygame.draw.polygon(surface, (255, 255, 255), bubble_tail)
-        pygame.draw.polygon(surface, (100, 200, 255), bubble_tail, 4)
+        pupil_size = int(7 * self.size) if state == "scared" else int(5 * self.size)
+        pygame.draw.circle(surface, (0, 0, 0), (int(eye_x + 3), int(eye_y)), pupil_size)
         
-        draw_text_outlined(surface, self.word.upper(), font_big, x, y - self.body_h//2 - 60, (50, 50, 150), (0,0,0), 2, center=True)
         return hitbox
 
 class BgFish:
     def __init__(self):
         self.x = random.randint(0, WIDTH)
-        self.y = random.randint(HEIGHT//2 + 50, HEIGHT - 50)
+        self.y = random.randint(HEIGHT//2 + 60, HEIGHT - 50)
         self.speed = random.uniform(20, 60)
         self.size = random.randint(10, 30)
         self.color = (random.randint(100, 200), random.randint(100, 200), random.randint(100, 200))
@@ -338,92 +355,85 @@ class BgFish:
         self.x -= self.speed * dt
         if self.x < -50:
             self.x = WIDTH + 50
-            self.y = random.randint(HEIGHT//2 + 50, HEIGHT - 50)
+            self.y = random.randint(HEIGHT//2 + 60, HEIGHT - 50)
         self.current_y = self.y + math.sin(time_val * 2 + self.offset) * 10
 
-    def draw(self, surface):
-        pygame.draw.ellipse(surface, self.color, (self.x, self.current_y, self.size*2, self.size))
-        pygame.draw.ellipse(surface, (0,0,0), (self.x, self.current_y, self.size*2, self.size), 1)
-        pts = [(self.x, self.current_y + self.size//2), (self.x - self.size, self.current_y), (self.x - self.size, self.current_y + self.size)]
+    def draw(self, surface, offset_x, offset_y):
+        pygame.draw.ellipse(surface, self.color, (self.x + offset_x, self.current_y + offset_y, self.size*2, self.size))
+        pygame.draw.ellipse(surface, (0,0,0), (self.x + offset_x, self.current_y + offset_y, self.size*2, self.size), 1)
+        pts = [(self.x + offset_x, self.current_y + self.size//2 + offset_y), (self.x - self.size + offset_x, self.current_y + offset_y), (self.x - self.size + offset_x, self.current_y + self.size + offset_y)]
         pygame.draw.polygon(surface, self.color, pts)
         pygame.draw.polygon(surface, (0,0,0), pts, 1)
 
 bg_fishes = [BgFish() for _ in range(7)]
 
-def draw_background(surface, time_val):
-    for y in range(HEIGHT // 2):
+def draw_background(surface, time_val, offset_x, offset_y):
+    w, h = surface.get_size()
+    for y in range(h // 2):
         color = (135 + int(y * 0.1), 206 + int(y * 0.05), 235)
-        pygame.draw.line(surface, color, (0, y), (WIDTH, y))
-    pygame.draw.circle(surface, (255, 230, 100), (700, 80), 40)
-    pygame.draw.circle(surface, (255, 200, 50), (700, 80), 40, 2)
-    cloud_x = (time_val * 20) % (WIDTH + 200) - 100
+        pygame.draw.line(surface, color, (0, y), (w, y))
+    pygame.draw.circle(surface, (255, 230, 100), (w - 100, 80), 40)
+    pygame.draw.circle(surface, (255, 200, 50), (w - 100, 80), 40, 2)
+    
+    cloud_x = (time_val * 20) % (w + 200) - 100
     for offset in [0, 250, 500]:
-        cx = (cloud_x + offset) % (WIDTH + 200) - 100
+        cx = (cloud_x + offset) % (w + 200) - 100
         pygame.draw.ellipse(surface, (255, 255, 255), (cx, 50, 100, 40))
         pygame.draw.ellipse(surface, (255, 255, 255), (cx + 30, 30, 80, 50))
 
-    for y in range(HEIGHT // 2, HEIGHT):
-        color = (30, 100 - (y - HEIGHT // 2) // 10, 150 - (y - HEIGHT // 2) // 5)
-        pygame.draw.line(surface, color, (0, y), (WIDTH, y))
-    for i in range(5):
+    for y in range(h // 2, h):
+        color = (20, 80 - (y - h // 2) // 10, 130 - (y - h // 2) // 5)
+        pygame.draw.line(surface, color, (0, y), (w, y))
+        
+    for i in range(6):
         offset = math.sin(time_val * 2 + i) * 20
-        pygame.draw.line(surface, (100, 200, 255), (100 + i * 150 + offset, HEIGHT//2 + 50), (150 + i * 150 + offset, HEIGHT//2 + 50), 2)
+        pygame.draw.line(surface, (80, 180, 255), (100 + i * 120 + offset, h//2 + 15), (140 + i * 120 + offset, h//2 + 15), 2)
 
-def draw_fisherman_and_basket(surface, caught_fish, cat_eating_timer):
-    boat_pts = [(50, 450), (220, 450), (190, 500), (80, 500)]
+def draw_fisherman_and_basket(surface, caught_fish, cat_eating_timer, offset_x, offset_y):
+    # Лодка поднята выше (было 450, стало 420)
+    boat_pts = [(50 + offset_x, 420 + offset_y), (220 + offset_x, 420 + offset_y), (190 + offset_x, 470 + offset_y), (80 + offset_x, 470 + offset_y)]
     pygame.draw.polygon(surface, (139, 69, 19), boat_pts)
     pygame.draw.polygon(surface, (80, 40, 10), boat_pts, 4)
-    pygame.draw.polygon(surface, (100, 50, 20), [(60, 450), (210, 450), (185, 490), (85, 490)])
-    pygame.draw.line(surface, (80, 40, 10), (70, 465), (195, 465), 2)
-    pygame.draw.line(surface, (80, 40, 10), (75, 480), (185, 480), 2)
+    pygame.draw.polygon(surface, (100, 50, 20), [(60 + offset_x, 420 + offset_y), (210 + offset_x, 420 + offset_y), (185 + offset_x, 460 + offset_y), (85 + offset_x, 460 + offset_y)])
+    pygame.draw.line(surface, (80, 40, 10), (70 + offset_x, 435 + offset_y), (195 + offset_x, 435 + offset_y), 2)
+    pygame.draw.line(surface, (80, 40, 10), (75 + offset_x, 450 + offset_y), (185 + offset_x, 450 + offset_y), 2)
     
-    basket_rect = pygame.Rect(20, 380, 90, 90)
-    pygame.draw.rect(surface, (160, 82, 45), basket_rect, border_radius=5)
-    pygame.draw.rect(surface, (80, 40, 10), basket_rect, width=3, border_radius=5)
+    # Волна (тоже поднята)
+    pygame.draw.polygon(surface, (20, 90, 140), [(40 + offset_x, 470 + offset_y), (230 + offset_x, 470 + offset_y), (200 + offset_x, 490 + offset_y), (60 + offset_x, 490 + offset_y)])
+    
+    # Корзина (поднята)
+    pygame.draw.rect(surface, (160, 82, 45), (20 + offset_x, 350 + offset_y, 90, 90), border_radius=5)
+    pygame.draw.rect(surface, (80, 40, 10), (20 + offset_x, 350 + offset_y, 90, 90), width=3, border_radius=5)
     for i in range(10, 90, 15):
-        pygame.draw.line(surface, (100, 50, 20), (20, 380+i), (110, 380+i), 2)
+        pygame.draw.line(surface, (100, 50, 20), (20 + offset_x, 350+i + offset_y), (110 + offset_x, 350+i + offset_y), 2)
     for i in range(20, 90, 20):
-        pygame.draw.line(surface, (100, 50, 20), (20+i, 380), (20+i, 470), 2)
-    pygame.draw.ellipse(surface, (120, 60, 30), (15, 370, 100, 20))
-    pygame.draw.ellipse(surface, (80, 40, 10), (15, 370, 100, 20), 3)
+        pygame.draw.line(surface, (100, 50, 20), (20+i + offset_x, 350 + offset_y), (20+i + offset_x, 440 + offset_y), 2)
+    pygame.draw.ellipse(surface, (120, 60, 30), (15 + offset_x, 340 + offset_y, 100, 20))
+    pygame.draw.ellipse(surface, (80, 40, 10), (15 + offset_x, 340 + offset_y, 100, 20), 3)
     
-    # --- МИЛЫЙ КОТИК ---
-    cat_x, cat_y = 65, 365
+    # Кот (поднят)
+    cat_x, cat_y = 65 + offset_x, 335 + offset_y
     outline_cat = (0, 0, 0)
     
-    # Хвост (закрученный влево)
     pygame.draw.arc(surface, (60, 60, 60), (cat_x - 50, cat_y - 10, 40, 40), math.pi/4, math.pi*1.5, 6)
     pygame.draw.arc(surface, outline_cat, (cat_x - 50, cat_y - 10, 40, 40), math.pi/4, math.pi*1.5, 2)
-
-    # Тело
     pygame.draw.ellipse(surface, (60, 60, 60), (cat_x - 25, cat_y - 5, 50, 35))
     pygame.draw.ellipse(surface, outline_cat, (cat_x - 25, cat_y - 5, 50, 35), 2)
-    
-    # Уши (закругленные)
     pygame.draw.circle(surface, (60, 60, 60), (cat_x - 15, cat_y - 25), 10)
     pygame.draw.circle(surface, outline_cat, (cat_x - 15, cat_y - 25), 10, 2)
     pygame.draw.circle(surface, (60, 60, 60), (cat_x + 15, cat_y - 25), 10)
     pygame.draw.circle(surface, outline_cat, (cat_x + 15, cat_y - 25), 10, 2)
-    
-    # Голова
     pygame.draw.circle(surface, (60, 60, 60), (cat_x, cat_y - 15), 22)
     pygame.draw.circle(surface, outline_cat, (cat_x, cat_y - 15), 22, 2)
-
-    # Щечки (белые)
     pygame.draw.ellipse(surface, (230, 230, 230), (cat_x - 18, cat_y - 12, 12, 8))
     pygame.draw.ellipse(surface, (230, 230, 230), (cat_x + 6, cat_y - 12, 12, 8))
-    
-    # Глаза
     pygame.draw.circle(surface, (255, 255, 0), (cat_x - 8, cat_y - 18), 5)
     pygame.draw.circle(surface, (255, 255, 0), (cat_x + 8, cat_y - 18), 5)
     pygame.draw.circle(surface, (0, 0, 0), (cat_x - 8, cat_y - 18), 2)
     pygame.draw.circle(surface, (0, 0, 0), (cat_x + 8, cat_y - 18), 2)
-    
-    # Нос (розовый)
     pygame.draw.polygon(surface, (255, 150, 150), [(cat_x, cat_y - 10), (cat_x - 3, cat_y - 7), (cat_x + 3, cat_y - 7)])
     pygame.draw.polygon(surface, outline_cat, [(cat_x, cat_y - 10), (cat_x - 3, cat_y - 7), (cat_x + 3, cat_y - 7)], 1)
     
-    # Рот
     if cat_eating_timer > 0:
         pygame.draw.ellipse(surface, (30, 30, 30), (cat_x - 8, cat_y - 5, 16, 12))
         pygame.draw.ellipse(surface, outline_cat, (cat_x - 8, cat_y - 5, 16, 12), 1)
@@ -432,7 +442,6 @@ def draw_fisherman_and_basket(surface, caught_fish, cat_eating_timer):
     else:
         pygame.draw.arc(surface, outline_cat, (cat_x - 8, cat_y - 8, 16, 12), 0, math.pi, 2)
         
-    # Усы
     pygame.draw.line(surface, (255, 255, 255), (cat_x - 10, cat_y - 5), (cat_x - 25, cat_y - 8), 1)
     pygame.draw.line(surface, (255, 255, 255), (cat_x - 10, cat_y - 3), (cat_x - 25, cat_y - 2), 1)
     pygame.draw.line(surface, (255, 255, 255), (cat_x + 10, cat_y - 5), (cat_x + 25, cat_y - 8), 1)
@@ -441,41 +450,40 @@ def draw_fisherman_and_basket(surface, caught_fish, cat_eating_timer):
     if cat_eating_timer <= 0:
         for i, f in enumerate(caught_fish):
             if i >= 5: break
-            fx = 30 + (i % 3) * 20
-            fy = 390 + (i // 3) * 20
+            fx = 30 + (i % 3) * 20 + offset_x
+            fy = 360 + (i // 3) * 20 + offset_y
             pygame.draw.ellipse(surface, f.color, (fx, fy, 20, 10))
             pygame.draw.ellipse(surface, (0,0,0), (fx, fy, 20, 10), 1)
             pygame.draw.polygon(surface, f.color, [(fx, fy+5), (fx-8, fy), (fx-8, fy+10)])
             pygame.draw.polygon(surface, (0,0,0), [(fx, fy+5), (fx-8, fy), (fx-8, fy+10)], 1)
 
-    # Рыбак
-    pygame.draw.rect(surface, (200, 50, 50), (125, 350, 25, 50), border_radius=8)
-    pygame.draw.rect(surface, (150, 30, 30), (125, 350, 25, 50), 3, border_radius=8)
-    pygame.draw.rect(surface, (200, 50, 50), (110, 350, 40, 100), border_radius=10)
-    pygame.draw.rect(surface, (150, 30, 30), (110, 350, 40, 100), 3, border_radius=10)
-    pygame.draw.rect(surface, (100, 200, 100), (115, 370, 30, 70), border_radius=5)
-    pygame.draw.rect(surface, (50, 150, 50), (115, 370, 30, 70), 2, border_radius=5)
+    # Рыбак (поднят на 30 пикселей)
+    pygame.draw.rect(surface, (200, 50, 50), (125 + offset_x, 320 + offset_y, 25, 50), border_radius=8)
+    pygame.draw.rect(surface, (150, 30, 30), (125 + offset_x, 320 + offset_y, 25, 50), 3, border_radius=8)
+    pygame.draw.rect(surface, (200, 50, 50), (110 + offset_x, 320 + offset_y, 40, 100), border_radius=10)
+    pygame.draw.rect(surface, (150, 30, 30), (110 + offset_x, 320 + offset_y, 40, 100), 3, border_radius=10)
+    pygame.draw.rect(surface, (100, 200, 100), (115 + offset_x, 340 + offset_y, 30, 70), border_radius=5)
+    pygame.draw.rect(surface, (50, 150, 50), (115 + offset_x, 340 + offset_y, 30, 70), 2, border_radius=5)
     
-    pygame.draw.circle(surface, (255, 220, 180), (130, 330), 25)
-    pygame.draw.circle(surface, (200, 150, 100), (130, 330), 25, 3)
-    beard_pts = [(115, 340), (130, 365), (145, 340), (130, 350)]
+    pygame.draw.circle(surface, (255, 220, 180), (130 + offset_x, 300 + offset_y), 25)
+    pygame.draw.circle(surface, (200, 150, 100), (130 + offset_x, 300 + offset_y), 25, 3)
+    beard_pts = [(115 + offset_x, 310 + offset_y), (130 + offset_x, 335 + offset_y), (145 + offset_x, 310 + offset_y), (130 + offset_x, 320 + offset_y)]
     pygame.draw.polygon(surface, (220, 220, 220), beard_pts)
     pygame.draw.polygon(surface, (150, 150, 150), beard_pts, 2)
-    pygame.draw.circle(surface, (0, 0, 0), (120, 325), 3)
-    pygame.draw.circle(surface, (0, 0, 0), (140, 325), 3)
-    pygame.draw.circle(surface, (200, 150, 120), (130, 335), 4)
+    pygame.draw.circle(surface, (0, 0, 0), (120 + offset_x, 295 + offset_y), 3)
+    pygame.draw.circle(surface, (0, 0, 0), (140 + offset_x, 295 + offset_y), 3)
+    pygame.draw.circle(surface, (200, 150, 120), (130 + offset_x, 305 + offset_y), 4)
     
-    pygame.draw.ellipse(surface, (50, 50, 50), (90, 310, 80, 20))
-    pygame.draw.ellipse(surface, (20, 20, 20), (90, 310, 80, 20), 3)
-    pygame.draw.rect(surface, (50, 50, 50), (110, 295, 40, 20))
-    pygame.draw.rect(surface, (20, 20, 20), (110, 295, 40, 20), 3)
-    pygame.draw.rect(surface, (200, 50, 50), (110, 308, 40, 5))
+    pygame.draw.ellipse(surface, (50, 50, 50), (90 + offset_x, 280 + offset_y, 80, 20))
+    pygame.draw.ellipse(surface, (20, 20, 20), (90 + offset_x, 280 + offset_y, 80, 20), 3)
+    pygame.draw.rect(surface, (50, 50, 50), (110 + offset_x, 265 + offset_y, 40, 20))
+    pygame.draw.rect(surface, (20, 20, 20), (110 + offset_x, 265 + offset_y, 40, 20), 3)
+    pygame.draw.rect(surface, (200, 50, 50), (110 + offset_x, 278 + offset_y, 40, 5))
     
-    pygame.draw.line(surface, (100, 50, 0), (140, 360), (400, 250), 6)
-    pygame.draw.circle(surface, (150, 150, 150), (150, 365), 8)
-    pygame.draw.circle(surface, (80, 80, 80), (150, 365), 8, 2)
+    pygame.draw.line(surface, (100, 50, 0), (140 + offset_x, 330 + offset_y), (400 + offset_x, 220 + offset_y), 6)
+    pygame.draw.circle(surface, (150, 150, 150), (150 + offset_x, 335 + offset_y), 8)
+    pygame.draw.circle(surface, (80, 80, 80), (150 + offset_x, 335 + offset_y), 8, 2)
 
-# --- VOSK ---
 try:
     model = Model(MODEL_PATH)
 except Exception as e:
@@ -515,10 +523,11 @@ message = ""
 state_timer = 0
 total_time = 0
 
+# Опускаем рыбу вниз
 fish_x = 550
-fish_y = 350
-start_x, start_y = 550, 350
-target_x, target_y = 65, 360 
+fish_y = 480 
+start_x, start_y = 550, 480
+target_x, target_y = 65, 350 # Целимся в рот кота (поднятому)
 flight_progress = 0.0
 
 fish_hitbox = pygame.Rect(0,0,0,0)
@@ -565,13 +574,25 @@ while running:
         if cat_eating_timer > 0:
             cat_eating_timer -= dt
             
+        current_width, current_height = screen.get_size()
+        offset_x = (current_width - WIDTH) // 2
+        offset_y = (current_height - HEIGHT) // 2
+
         mouse_pos = pygame.mouse.get_pos()
-        is_hover = (not menu_open) and (state in ("waiting", "listening")) and fish_hitbox.collidepoint(mouse_pos)
+        
+        is_hover = (not menu_open) and (state in ("waiting", "listening")) and fish_hitbox.move(offset_x, offset_y).collidepoint(mouse_pos)
         pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND if is_hover else pygame.SYSTEM_CURSOR_ARROW)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                is_fullscreen = not is_fullscreen
+                if is_fullscreen:
+                    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+                else:
+                    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
                 
             if menu_open:
                 if event.type == pygame.KEYDOWN:
@@ -593,12 +614,12 @@ while running:
                     menu_scroll = max(0, min(menu_scroll - event.y, max_scroll))
                     
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if btn_close_rect.collidepoint(event.pos):
+                    if btn_close_rect.move(offset_x, offset_y).collidepoint(event.pos):
                         menu_open = False
                         
-                    if pygame.Rect(250, 150, 100, 40).collidepoint(event.pos): menu_level = 0; menu_scroll = 0
-                    if pygame.Rect(350, 150, 100, 40).collidepoint(event.pos): menu_level = 1; menu_scroll = 0
-                    if pygame.Rect(450, 150, 100, 40).collidepoint(event.pos): menu_level = 2; menu_scroll = 0
+                    if pygame.Rect(250 + offset_x, 150 + offset_y, 100, 40).collidepoint(event.pos): menu_level = 0; menu_scroll = 0
+                    if pygame.Rect(350 + offset_x, 150 + offset_y, 100, 40).collidepoint(event.pos): menu_level = 1; menu_scroll = 0
+                    if pygame.Rect(450 + offset_x, 150 + offset_y, 100, 40).collidepoint(event.pos): menu_level = 2; menu_scroll = 0
                     
                     level_key = ["easy", "medium", "hard"][menu_level]
                     words_list = custom_words.get(level_key, [])
@@ -606,28 +627,28 @@ while running:
                     for i in range(5):
                         idx = i + menu_scroll
                         if idx >= len(words_list): break
-                        del_rect = pygame.Rect(560, 330 + i*30, 30, 20)
+                        del_rect = pygame.Rect(560 + offset_x, 330 + i*30 + offset_y, 30, 20)
                         if del_rect.collidepoint(event.pos):
                             remove_custom_word(words_list[idx], menu_level)
                             break
                     
             else:
-                slider_music.handle_event(event)
-                slider_fx.handle_event(event)
+                slider_music.handle_event(event, offset_x, offset_y)
+                slider_fx.handle_event(event, offset_x, offset_y)
                 vol_music = slider_music.value
                 vol_fx = slider_fx.value
                 update_volumes()
 
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if btn_menu_rect.collidepoint(event.pos):
+                    if btn_menu_rect.move(offset_x, offset_y).collidepoint(event.pos):
                         menu_open = True
                         continue
                         
-                    if state in ("waiting", "listening") and fish_hitbox.collidepoint(event.pos):
+                    if state in ("waiting", "listening") and fish_hitbox.move(offset_x, offset_y).collidepoint(event.pos):
                         if vol_fx > 0 and current_fish.word:
                             speak_text(current_fish.word)
                     
-                    if pygame.Rect(20, 50, 250, 40).collidepoint(event.pos):
+                    if pygame.Rect(20 + offset_x, 50 + offset_y, 250, 40).collidepoint(event.pos):
                         difficulty = (difficulty + 1) % 3
                         current_fish = Fish(difficulty)
                         state = "waiting"
@@ -644,16 +665,19 @@ while running:
 
         if not menu_open:
             if state == "listening" and not result_q.empty():
-                said = result_q.get()
+                said_text = result_q.get()
                 listening = False
-                if said == current_fish.word:
-                    state = "flying"
-                    flight_progress = 0.0
-                    message = f"Поймал! ({said})"
-                    if sound_catch and vol_fx > 0: sound_catch.play()
+                
+                said_words = said_text.replace('.', '').replace(',', '').replace('!', '').replace('?', '').split()
+                
+                if current_fish.word and current_fish.word in said_words:
+                    state = "scared" 
+                    state_timer = 1.0 
+                    message = "Ой! Ты её напугал!"
+                    if sound_scare and vol_fx > 0: sound_scare.play()
                 else:
                     state = "confused"
-                    message = f"«{said}»? Попробуй ещё!"
+                    message = f"«{said_text}»? Попробуй ещё!"
                     state_timer = 2.0
 
             if state == "confused":
@@ -661,24 +685,29 @@ while running:
                 if state_timer <= 0:
                     state = "waiting"
                     message = ""
-                    fish_x = 550
-                    fish_y = 350
             
+            elif state == "scared":
+                state_timer -= dt
+                if state_timer <= 0:
+                    state = "flying"
+                    flight_progress = 0.0
+                    message = "Поймал!"
+                    if sound_catch and vol_fx > 0: sound_catch.play()
+                    if sound_splash and vol_fx > 0: sound_splash.play()
+                    
             elif state == "flying":
-                if flight_progress == 0.0 and sound_splash and vol_fx > 0:
-                    sound_splash.play()
                 flight_progress += dt * 0.8
                 if flight_progress >= 1.0:
                     flight_progress = 1.0
                     state = "caught"
-                    state_timer = 4.5 # Увеличили таймер, так как теперь ждем два звука
+                    state_timer = 4.5
                     score += 1
                     
                     cat_eating_timer = 1.5
                     eat_duration = 1.5
                     if sound_cat_eat and vol_fx > 0: 
                         sound_cat_eat.play()
-                        eat_duration = sound_cat_eat.get_length() # Если звук длиннее 1.5 сек, ждем его
+                        eat_duration = sound_cat_eat.get_length()
                         cat_eating_timer = eat_duration
                     
                     fisherman_speech = current_fish.get_comment()
@@ -697,36 +726,39 @@ while running:
                     state = "waiting"
                     message = ""
                     fish_x = 550
-                    fish_y = 350
+                    fish_y = 480
 
-            if state == "waiting" or state == "listening":
+            if state in ("waiting", "listening", "confused"):
                 fish_x = 550 + math.sin(total_time * 2) * 30
-                fish_y = 350
+                fish_y = 480
 
             if fisherman_speech_timer > 0:
                 fisherman_speech_timer -= dt
             else:
                 fisherman_speech = ""
 
-        draw_background(screen, total_time)
+        screen.fill((0, 0, 0)) 
+        
+        draw_background(screen, total_time, offset_x, offset_y)
+        
         for bf in bg_fishes:
             bf.update(dt, total_time)
-            bf.draw(screen)
+            bf.draw(screen, offset_x, offset_y)
 
-        if state == "flying" or state == "caught":
-            pygame.draw.line(screen, (255, 255, 255), (400, 250), (fish_x, fish_y), 2)
+        if state in ("flying", "caught"):
+            pygame.draw.line(screen, (255, 255, 255), (400 + offset_x, 220 + offset_y), (fish_x + offset_x, fish_y + offset_y), 2)
         elif state != "caught":
-            pygame.draw.aaline(screen, (255, 255, 255), (400, 250), (fish_x-40, fish_y-20))
-            pygame.draw.aaline(screen, (255, 255, 255), (fish_x-40, fish_y-20), (fish_x, fish_y))
+            pygame.draw.aaline(screen, (255, 255, 255), (400 + offset_x, 220 + offset_y), (fish_x-40 + offset_x, fish_y-20 + offset_y))
+            pygame.draw.aaline(screen, (255, 255, 255), (fish_x-40 + offset_x, fish_y-20 + offset_y), (fish_x + offset_x, fish_y + offset_y))
 
-        draw_fisherman_and_basket(screen, caught_fish_list, cat_eating_timer)
+        draw_fisherman_and_basket(screen, caught_fish_list, cat_eating_timer, offset_x, offset_y)
         
         if current_fish.word is None and not menu_open:
             msg = "Слова закончились! Добавьте новое в меню."
-            draw_text_outlined(screen, msg, font_med, WIDTH//2, 200, (255, 255, 0), (0,0,0), 2, center=True)
+            draw_text_outlined(screen, msg, font_med, current_width//2, current_height//2 - 100, (255, 255, 0), (0,0,0), 2, center=True)
             fish_hitbox = pygame.Rect(0,0,0,0)
         elif state != "caught" and not menu_open:
-            fish_hitbox = current_fish.draw(screen, fish_x, fish_y, state, total_time)
+            fish_hitbox = current_fish.draw(screen, fish_x, fish_y, state, total_time, offset_x, offset_y)
         else:
             fish_hitbox = pygame.Rect(0,0,0,0)
 
@@ -739,91 +771,91 @@ while running:
                 else: line2 += w + " "
             bubble_w = max(font_small.size(line1)[0], font_small.size(line2)[0]) + 30
             bubble_h = 70 if line2 else 40
-            bubble_x = 130 - bubble_w // 2
-            bubble_y = 280 - bubble_h
+            bubble_x = 130 - bubble_w // 2 + offset_x
+            bubble_y = 250 - bubble_h + offset_y
             
             pygame.draw.rect(screen, (255, 255, 255), (bubble_x, bubble_y, bubble_w, bubble_h), border_radius=15)
             pygame.draw.rect(screen, (0, 0, 0), (bubble_x, bubble_y, bubble_w, bubble_h), width=3, border_radius=15)
-            tail_pts = [(130 - 10, bubble_y + bubble_h), (130 + 10, bubble_y + bubble_h), (130, bubble_y + bubble_h + 15)]
+            tail_pts = [(130 - 10 + offset_x, bubble_y + bubble_h), (130 + 10 + offset_x, bubble_y + bubble_h), (130 + offset_x, bubble_y + bubble_h + 15)]
             pygame.draw.polygon(screen, (255, 255, 255), tail_pts)
             pygame.draw.polygon(screen, (0, 0, 0), tail_pts, 3)
             if line1: draw_text_outlined(screen, line1.strip(), font_small, bubble_x + 15, bubble_y + 10, (0, 0, 0), (255, 255, 255), 1)
             if line2: draw_text_outlined(screen, line2.strip(), font_small, bubble_x + 15, bubble_y + 35, (0, 0, 0), (255, 255, 255), 1)
 
         if message and not menu_open:
-            draw_text_outlined(screen, message, font_med, 50, 90, (255, 255, 0), (0,0,0), 2)
+            draw_text_outlined(screen, message, font_med, 50 + offset_x, 90 + offset_y, (255, 255, 0), (0,0,0), 2)
 
         if not menu_open:
-            draw_text_outlined(screen, "Пробел — слушать", font_med, 50, 550, (200, 200, 200), (0,0,0), 2)
+            draw_text_outlined(screen, "Пробел — слушать", font_med, 50 + offset_x, 550 + offset_y, (200, 200, 200), (0,0,0), 2)
             
-            draw_text_outlined(screen, f"Улов: {score}", font_med, 20, 10, (255, 255, 255), (0,0,0), 2)
+            draw_text_outlined(screen, f"Улов: {score}", font_med, 20 + offset_x, 10 + offset_y, (255, 255, 255), (0,0,0), 2)
             
             diff_names = ["Легко", "Средне", "Сложно"]
             diff_colors = [(100, 200, 100), (255, 200, 100), (255, 100, 100)]
-            draw_text_outlined(screen, f"Сложность: {diff_names[difficulty]}", font_med, 20, 45, diff_colors[difficulty], (0,0,0), 2)
+            draw_text_outlined(screen, f"Сложность: {diff_names[difficulty]}", font_med, 20 + offset_x, 45 + offset_y, diff_colors[difficulty], (0,0,0), 2)
             
-            draw_text_outlined(screen, "Музыка", font_ui, 160, 5, (255, 255, 255), (0,0,0), 1)
-            draw_text_outlined(screen, "Звуки", font_ui, 370, 5, (255, 255, 255), (0,0,0), 1)
-            slider_music.draw(screen)
-            slider_fx.draw(screen)
+            draw_text_outlined(screen, "Музыка", font_ui, 160 + offset_x, 5 + offset_y, (255, 255, 255), (0,0,0), 1)
+            draw_text_outlined(screen, "Звуки", font_ui, 370 + offset_x, 5 + offset_y, (255, 255, 255), (0,0,0), 1)
+            slider_music.draw(screen, offset_x, offset_y)
+            slider_fx.draw(screen, offset_x, offset_y)
 
-        pygame.draw.rect(screen, (50, 150, 250), btn_menu_rect, border_radius=5)
-        pygame.draw.rect(screen, (0,0,0), btn_menu_rect, width=2, border_radius=5)
-        draw_text_outlined(screen, "МЕНЮ", font_small, btn_menu_rect.centerx, btn_menu_rect.centery, (255, 255, 255), (0,0,0), 1, center=True)
+        pygame.draw.rect(screen, (50, 150, 250), btn_menu_rect.move(offset_x, offset_y), border_radius=5)
+        pygame.draw.rect(screen, (0,0,0), btn_menu_rect.move(offset_x, offset_y), width=2, border_radius=5)
+        draw_text_outlined(screen, "МЕНЮ", font_small, btn_menu_rect.centerx + offset_x, btn_menu_rect.centery + offset_y, (255, 255, 255), (0,0,0), 1, center=True)
 
         if menu_open:
-            s = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            s = pygame.Surface((current_width, current_height), pygame.SRCALPHA)
             s.fill((0, 0, 0, 180))
             screen.blit(s, (0, 0))
             
-            menu_rect = pygame.Rect(150, 100, 500, 400)
+            menu_rect = pygame.Rect(150 + offset_x, 100 + offset_y, 500, 400)
             pygame.draw.rect(screen, (240, 240, 240), menu_rect, border_radius=15)
             pygame.draw.rect(screen, (0, 0, 0), menu_rect, width=3, border_radius=15)
             
-            draw_text_outlined(screen, "СПИСОК СЛОВ", font_menu, WIDTH//2, 130, (0, 0, 0), (255, 255, 255), 1, center=True)
+            draw_text_outlined(screen, "СПИСОК СЛОВ", font_menu, WIDTH//2 + offset_x, 130 + offset_y, (0, 0, 0), (255, 255, 255), 1, center=True)
             
-            pygame.draw.rect(screen, (220, 50, 50), btn_close_rect, border_radius=5)
-            pygame.draw.rect(screen, (0,0,0), btn_close_rect, width=2, border_radius=5)
-            draw_text_outlined(screen, "X", font_menu, btn_close_rect.centerx, btn_close_rect.centery, (255,255,255), (0,0,0), 1, center=True)
+            pygame.draw.rect(screen, (220, 50, 50), btn_close_rect.move(offset_x, offset_y), border_radius=5)
+            pygame.draw.rect(screen, (0,0,0), btn_close_rect.move(offset_x, offset_y), width=2, border_radius=5)
+            draw_text_outlined(screen, "X", font_menu, btn_close_rect.centerx + offset_x, btn_close_rect.centery + offset_y, (255,255,255), (0,0,0), 1, center=True)
             
             tabs = ["Легкие", "Средние", "Сложные"]
             for i, tab in enumerate(tabs):
-                tab_rect = pygame.Rect(250 + i*100, 150, 100, 40)
+                tab_rect = pygame.Rect(250 + i*100 + offset_x, 150 + offset_y, 100, 40)
                 color = (100, 200, 255) if i == menu_level else (200, 200, 200)
                 pygame.draw.rect(screen, color, tab_rect, border_radius=5)
                 pygame.draw.rect(screen, (0,0,0), tab_rect, width=2, border_radius=5)
                 draw_text_outlined(screen, tab, font_small, tab_rect.centerx, tab_rect.centery, (0,0,0), (255,255,255), 1, center=True)
                 
-            input_rect = pygame.Rect(200, 220, 400, 50)
+            input_rect = pygame.Rect(200 + offset_x, 220 + offset_y, 400, 50)
             pygame.draw.rect(screen, (255, 255, 255), input_rect)
             pygame.draw.rect(screen, (0, 0, 0), input_rect, width=3)
-            draw_text_outlined(screen, menu_input_text + "_", font_menu, 210, 235, (0, 0, 0), (255,255,255), 1)
+            draw_text_outlined(screen, menu_input_text + "_", font_menu, 210 + offset_x, 235 + offset_y, (0, 0, 0), (255,255,255), 1)
             
             level_key = ["easy", "medium", "hard"][menu_level]
             words_list = custom_words.get(level_key, [])
             
-            pygame.draw.rect(screen, (200, 200, 200), (200, 290, 400, 30))
-            draw_text_outlined(screen, "Слово (клик для удаления)", font_small, 210, 295, (0,0,0), (255,255,255), 1)
+            pygame.draw.rect(screen, (200, 200, 200), (200 + offset_x, 290 + offset_y, 400, 30))
+            draw_text_outlined(screen, "Слово (клик для удаления)", font_small, 210 + offset_x, 295 + offset_y, (0,0,0), (255,255,255), 1)
             
             for i in range(5):
                 idx = i + menu_scroll
                 if idx >= len(words_list): break
                 w = words_list[idx]
-                row_rect = pygame.Rect(200, 325 + i*30, 400, 30)
+                row_rect = pygame.Rect(200 + offset_x, 325 + i*30 + offset_y, 400, 30)
                 
                 if i % 2 == 0:
                     pygame.draw.rect(screen, (230, 230, 230), row_rect)
                 
-                draw_text_outlined(screen, w, font_small, 210, 330 + i*30, (0, 100, 0), (255,255,255), 1)
+                draw_text_outlined(screen, w, font_small, 210 + offset_x, 330 + i*30 + offset_y, (0, 100, 0), (255,255,255), 1)
                 
-                del_rect = pygame.Rect(560, 330 + i*30, 30, 20)
+                del_rect = pygame.Rect(560 + offset_x, 330 + i*30 + offset_y, 30, 20)
                 pygame.draw.rect(screen, (220, 50, 50), del_rect, border_radius=3)
                 draw_text_outlined(screen, "X", font_ui, del_rect.centerx, del_rect.centery, (255,255,255), (0,0,0), 1, center=True)
 
             if len(words_list) > 5:
-                draw_text_outlined(screen, "Колесико мыши — прокрутка", font_small, 200, 470, (100, 100, 100), (255,255,255), 1)
+                draw_text_outlined(screen, "Колесико мыши — прокрутка", font_small, 200 + offset_x, 470 + offset_y, (100, 100, 100), (255,255,255), 1)
                 
-            draw_text_outlined(screen, "Enter — добавить, Esc — закрыть", font_small, 200, 490, (100, 100, 100), (255,255,255), 1)
+            draw_text_outlined(screen, "Enter — добавить, Esc — закрыть", font_small, 200 + offset_x, 490 + offset_y, (100, 100, 100), (255,255,255), 1)
 
         pygame.display.flip()
 

@@ -1,0 +1,32 @@
+{
+  "entry": "game_pygame.py",
+  "name": "LogopedicFishing",
+  "display_name": "LogopedicFishing",
+  "version": "1.0.0",
+  "description": "The logopedic game for children",
+  "icon": "assets/icon.png",
+  "pyinstaller": {
+    "onefile": false,
+    "windowed": false,
+    "add_data": [
+      "assets:assets",
+      "models:models",
+      "venv/Lib/site-packages/vosk:vosk"
+    ],
+    "clean": true,
+    "noconfirm": true
+  },
+  "platforms": {
+    "windows": {
+      "inno_setup_path": "C:\\Program Files\\Inno Setup 7\\ISCC.exe",
+      "inno_setup": {
+        "create_desktop_icon": true,
+        "create_start_menu_icon": true,
+        "allow_run_after_install": true,
+        "languages": [
+          "english"
+        ]
+      }
+    }
+  }
+}
